@@ -35,12 +35,38 @@ class ToneGenerator {
     this.active = false;
   }
 
+  createContext(Ctx) {
+    try { return new Ctx({ latencyHint: 'interactive' }); }
+    catch { return new Ctx(); }
+  }
+
+  async unlock() {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) throw new Error('Web Audio 미지원');
+    if (!this.ctx || this.ctx.state === 'closed') this.ctx = this.createContext(Ctx);
+    if (this.ctx.state === 'suspended') await this.ctx.resume();
+
+    // iOS/Safari에서 첫 사용자 제스처 안에 실제 오디오 그래프를 한번 건드려 둔다.
+    try {
+      const silent = this.ctx.createBufferSource();
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0;
+      silent.buffer = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+      silent.connect(gain).connect(this.ctx.destination);
+      silent.start(0);
+    } catch {}
+
+    return this.ctx;
+  }
+
   async start(durationSec) {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) throw new Error('Web Audio 미지원');
-    // 세션마다 새 컨텍스트 (깨끗한 클록 + iOS 안정성)
-    this.ctx = new Ctx();
+    if (this.active) await this.stop(false);
+    // 사용자 제스처에서 미리 unlock된 컨텍스트가 있으면 재사용한다.
+    if (!this.ctx || this.ctx.state === 'closed') this.ctx = this.createContext(Ctx);
     if (this.ctx.state === 'suspended') await this.ctx.resume();
+    if (this.ctx.state !== 'running') throw new Error('오디오가 아직 시작되지 않았습니다.');
 
     const now = this.ctx.currentTime;
     const start = now + 0.02; // 렌더 안정용 짧은 리드타임
@@ -225,7 +251,7 @@ function applyTheme() {
 const deviceState = { connected: false, label: '' };
 async function detectAudioOutput() {
   try {
-    if (!navigator.mediaDevices?.enumerateDevices) return setDeviceUI(false);
+    if (!navigator.mediaDevices?.enumerateDevices) return setDeviceUI(store.get('deviceConfirmed', false));
     const devs = await navigator.mediaDevices.enumerateDevices();
     const outs = devs.filter((d) => d.kind === 'audiooutput');
     const bt = outs.find((d) => /airpod|bluetooth|buds|헤드|이어|head|ear/i.test(d.label));
@@ -242,7 +268,7 @@ function setDeviceUI(connected, label = '') {
   const chip = $('device-chip');
   chip.classList.toggle('connected', connected);
   $('chip-text').textContent = connected
-    ? (label ? '연결됨 · ' + shortLabel(label) : '이어폰 연결됨')
+    ? (label ? '연결됨 · ' + shortLabel(label) : '이어폰 사용 확인됨')
     : '이어폰을 연결하세요';
 }
 function shortLabel(l) { return l.length > 16 ? l.slice(0, 15) + '…' : l; }
@@ -274,6 +300,10 @@ function fmt(sec) {
 
 const tone = new ToneGenerator();
 let endBtnTimer = 0;
+async function unlockAudioForGesture() {
+  try { await tone.unlock(); return true; }
+  catch { return false; }
+}
 
 const session = new SessionController(tone, {
   onStart() {
@@ -310,7 +340,8 @@ const session = new SessionController(tone, {
   onError() {
     endSessionCleanup();
     showScreen('home');
-    toast('오디오를 시작할 수 없어요. 화면을 한 번 더 탭해 주세요.');
+    setHomeStatus('대기 중');
+    toast('오디오를 시작할 수 없어요. 무음 모드와 볼륨을 확인한 뒤 다시 탭해 주세요.', 3600);
   },
 });
 
@@ -344,6 +375,7 @@ function releaseWakeLock() { try { wakeLock?.release?.(); } catch {} wakeLock = 
    ─────────────────────────────────────────── */
 async function requestStart() {
   if (session.state === 'running') return;
+  await unlockAudioForGesture();
   // 첫 세션 전 '100HZ 전정 안정화' 안내 화면을 1회 노출
   if (!store.get('tipsSeen', false)) { showTips(true); return; }
   setHomeStatus('시작하는 중…');
@@ -420,6 +452,7 @@ function finishOnboarding() {
 function bind() {
   // 홈
   $('play-btn').addEventListener('click', requestStart);
+  $('play-btn').addEventListener('pointerdown', unlockAudioForGesture);
   $('device-chip').addEventListener('click', () => openSheet('device'));
   $('open-settings').addEventListener('click', () => showScreen('settings'));
 
@@ -453,6 +486,7 @@ function bind() {
 
   // 세션 안내(100HZ 전정 안정화) — '알겠습니다'
   $('tips-ok').addEventListener('click', async () => {
+    await unlockAudioForGesture();
     const beforeSession = $('screen-tips').dataset.beforeSession === '1';
     store.set('tipsSeen', true);
     hideTips();
@@ -466,10 +500,16 @@ function bind() {
   // 이어폰 시트
   $('device-recheck').addEventListener('click', async () => {
     await detectAudioOutput();
-    if (deviceState.connected) { store.set('deviceConfirmed', true); closeSheets(); toast('이어폰이 연결되었어요.'); }
-    else { store.set('deviceConfirmed', true); setDeviceUI(true); closeSheets(); toast('연결로 표시했어요. 밀착형 이어폰 사용을 권장합니다.'); }
+    if (deviceState.connected) { store.set('deviceConfirmed', true); closeSheets(); toast('이어폰 사용을 확인했어요.'); }
+    else { store.set('deviceConfirmed', true); setDeviceUI(true); closeSheets(); toast('이어폰 사용으로 표시했어요. 밀착형 이어폰을 권장합니다.'); }
   });
-  $('device-force').addEventListener('click', () => { closeSheets(); toast('이어폰 없이 재생합니다. 효과가 제한될 수 있어요.'); setHomeStatus('시작하는 중…'); session.start(); });
+  $('device-force').addEventListener('click', async () => {
+    await unlockAudioForGesture();
+    closeSheets();
+    toast('이어폰 확인 없이 재생합니다. 효과가 제한될 수 있어요.');
+    setHomeStatus('시작하는 중…');
+    session.start();
+  });
 
   // 볼륨 시트
   $('volume-ok').addEventListener('click', () => { store.set('volumeGuided', true); closeSheets(); });
