@@ -244,34 +244,15 @@ function applyTheme() {
 }
 
 /* ───────────────────────────────────────────
-   이어폰(출력 장치) 감지 — 웹 한계 내 근사
-   웹은 AirPods를 신뢰성 있게 식별할 수 없음.
-   기기 라벨이 조회되면 안내만 하고 강제하지 않음.
+   이어폰 착용 확인
+   웹은 실제 출력 장치/착용 여부를 안정적으로 확인할 수 없음.
+   따라서 사용자 확인을 명시적으로 받고 그 상태만 UI에 반영한다.
    ─────────────────────────────────────────── */
-const deviceState = { connected: false, label: '' };
-async function detectAudioOutput() {
-  try {
-    if (!navigator.mediaDevices?.enumerateDevices) return setDeviceUI(store.get('deviceConfirmed', false));
-    const devs = await navigator.mediaDevices.enumerateDevices();
-    const outs = devs.filter((d) => d.kind === 'audiooutput');
-    const bt = outs.find((d) => /airpod|bluetooth|buds|헤드|이어|head|ear/i.test(d.label));
-    if (bt) return setDeviceUI(true, bt.label);
-    // 라벨 접근 불가(권한) 시 사용자 자기보고에 의존
-    setDeviceUI(store.get('deviceConfirmed', false));
-  } catch {
-    setDeviceUI(store.get('deviceConfirmed', false));
-  }
-}
-function setDeviceUI(connected, label = '') {
-  deviceState.connected = connected;
-  deviceState.label = label;
+function setDeviceUI(confirmed) {
   const chip = $('device-chip');
-  chip.classList.toggle('connected', connected);
-  $('chip-text').textContent = connected
-    ? (label ? '연결됨 · ' + shortLabel(label) : '이어폰 사용 확인됨')
-    : '이어폰을 연결하세요';
+  chip.classList.toggle('connected', confirmed);
+  $('chip-text').textContent = confirmed ? '이어폰 착용 확인됨' : '이어폰을 착용하세요';
 }
-function shortLabel(l) { return l.length > 16 ? l.slice(0, 15) + '…' : l; }
 
 /* ───────────────────────────────────────────
    세션 UI 바인딩
@@ -376,10 +357,19 @@ function releaseWakeLock() { try { wakeLock?.release?.(); } catch {} wakeLock = 
 async function requestStart() {
   if (session.state === 'running') return;
   await unlockAudioForGesture();
+  openHeadphonePrompt(true);
+}
+
+async function continueAfterHeadphoneConfirm() {
   // 첫 세션 전 '100HZ 전정 안정화' 안내 화면을 1회 노출
   if (!store.get('tipsSeen', false)) { showTips(true); return; }
   setHomeStatus('시작하는 중…');
   await session.start();
+}
+
+function openHeadphonePrompt(beforeSession = false) {
+  $('sheet-device').dataset.beforeSession = beforeSession ? '1' : '';
+  openSheet('device');
 }
 
 // 세션 안내(100HZ 전정 안정화) 화면
@@ -453,7 +443,7 @@ function bind() {
   // 홈
   $('play-btn').addEventListener('click', requestStart);
   $('play-btn').addEventListener('pointerdown', unlockAudioForGesture);
-  $('device-chip').addEventListener('click', () => openSheet('device'));
+  $('device-chip').addEventListener('click', () => openHeadphonePrompt(false));
   $('open-settings').addEventListener('click', () => showScreen('settings'));
 
   // 세션 — 화면 탭 시 종료 버튼 3초 노출 (오조작 방지)
@@ -499,17 +489,15 @@ function bind() {
 
   // 이어폰 시트
   $('device-recheck').addEventListener('click', async () => {
-    await detectAudioOutput();
-    if (deviceState.connected) { store.set('deviceConfirmed', true); closeSheets(); toast('이어폰 사용을 확인했어요.'); }
-    else { store.set('deviceConfirmed', true); setDeviceUI(true); closeSheets(); toast('이어폰 사용으로 표시했어요. 밀착형 이어폰을 권장합니다.'); }
-  });
-  $('device-force').addEventListener('click', async () => {
     await unlockAudioForGesture();
+    const beforeSession = $('sheet-device').dataset.beforeSession === '1';
+    store.set('deviceConfirmed', true);
+    setDeviceUI(true);
     closeSheets();
-    toast('이어폰 확인 없이 재생합니다. 효과가 제한될 수 있어요.');
-    setHomeStatus('시작하는 중…');
-    session.start();
+    if (beforeSession) await continueAfterHeadphoneConfirm();
+    else toast('이어폰 착용을 확인했어요.');
   });
+  $('device-force').addEventListener('click', () => { closeSheets(); setHomeStatus('대기 중'); });
 
   // 볼륨 시트
   $('volume-ok').addEventListener('click', () => { store.set('volumeGuided', true); closeSheets(); });
@@ -530,13 +518,6 @@ function bind() {
       session.abort('세션이 중단됐어요. 다시 시작하세요.');
     }
   });
-  // 출력 장치 변경 감지
-  if (navigator.mediaDevices) {
-    navigator.mediaDevices.addEventListener?.('devicechange', () => {
-      detectAudioOutput();
-      if (session.state === 'running') session.abort('오디오 장치가 변경돼 중단됐어요.');
-    });
-  }
 }
 
 /* ───────────────────────────────────────────
@@ -545,7 +526,7 @@ function bind() {
 function init() {
   applyTheme();
   bind();
-  detectAudioOutput();
+  setDeviceUI(store.get('deviceConfirmed', false));
 
   if (!store.get('onboarded', false)) {
     showScreen('onboarding');
