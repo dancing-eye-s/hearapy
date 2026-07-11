@@ -1,0 +1,19 @@
+{
+  "name": "Hearapy — 100Hz 멀미 방지 케어",
+  "short_name": "Hearapy",
+  "description": "이동 전 60초, 100Hz 순음으로 멀미를 사전에 완화하는 웰니스 앱.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#EFF2F6",
+  "theme_color": "#EFF2F6",
+  "categories": ["health", "lifestyle"],
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='112' fill='%23EFF2F6'/%3E%3Cpath d='M56 256 Q120 96 184 256 T312 256 T440 256' fill='none' stroke='%230A84FF' stroke-width='24' stroke-linecap='round'/%3E%3C/svg%3E",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
