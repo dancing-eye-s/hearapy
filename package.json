@@ -1,0 +1,9 @@
+{
+  "name": "hearapy",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "npx serve .",
+    "build": "echo \"Static Hearapy app: no build step required\""
+  }
+}
